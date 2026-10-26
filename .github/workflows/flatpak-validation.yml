@@ -1,0 +1,56 @@
+name: Flatpak 26.08 compatibility
+on:
+  push:
+    branches: [test/flatpak-26-08]
+permissions:
+  contents: read
+jobs:
+  compatibility:
+    name: ${{ matrix.app }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [{"app":"pdfcraft","arch":"x86_64","runner":"ubuntu-24.04","url":"https://github.com/storytold/pdfcraft/releases/download/v0.14.0/pdfcraft-0.14.0-linux-x86_64.tar.gz","sha256":"a93f511e87f63036ca5f5300b1a7a18a3cd2285205deab15394caa6ee83c6f1f"},{"app":"pdfcraft","arch":"aarch64","runner":"ubuntu-24.04-arm","url":"https://github.com/storytold/pdfcraft/releases/download/v0.14.0/pdfcraft-0.14.0-linux-aarch64.tar.gz","sha256":"fe6711b5e211bc01405f3dad799f252f4e1b2cc976b7c47f83fe7a97cebe9838"},{"app":"gridcraft","arch":"x86_64","runner":"ubuntu-24.04","url":"https://github.com/storytold/gridcraft/releases/download/v0.12.1/gridcraft-0.12.1-linux-x86_64.tar.gz","sha256":"1c1750dd6d26376cf8c8af22b46dc0ed3d8d5cbb115e555f0fc7d0cf7a9aea9a"},{"app":"gridcraft","arch":"aarch64","runner":"ubuntu-24.04-arm","url":"https://github.com/storytold/gridcraft/releases/download/v0.12.1/gridcraft-0.12.1-linux-aarch64.tar.gz","sha256":"65465f9077fa1490bc6835515ed7dfbc562b5dfe417493c6c1c07838b149ffab"},{"app":"wordcraft","arch":"x86_64","runner":"ubuntu-24.04","url":"https://github.com/storytold/wordcraft/releases/download/v0.11.0/wordcraft-0.11.0-linux-x86_64.tar.gz","sha256":"034c247bf6dab172a2edfb0767de9065125b857826c6915f7ef39b9f43951d5a"},{"app":"wordcraft","arch":"aarch64","runner":"ubuntu-24.04-arm","url":"https://github.com/storytold/wordcraft/releases/download/v0.11.0/wordcraft-0.11.0-linux-aarch64.tar.gz","sha256":"a373495928e81be5184a8a94e55db1ed14a3ad1e61b4a13f473d20255f391fc6"},{"app":"deckcraft","arch":"x86_64","runner":"ubuntu-24.04","url":"https://github.com/storytold/deckcraft/releases/download/v0.11.1/deckcraft-0.11.1-linux-x86_64.tar.gz","sha256":"7bf57a10a4fcf7673ecb669b64e0e545475780ef3e4ee6bf603aeb00f544e69c"},{"app":"deckcraft","arch":"aarch64","runner":"ubuntu-24.04-arm","url":"https://github.com/storytold/deckcraft/releases/download/v0.11.1/deckcraft-0.11.1-linux-aarch64.tar.gz","sha256":"16c6a05587aca978a9a75569f19ca60ceaf94215fa42219a8d2781e356c8b865"}]
+    env:
+      APP: ${{ matrix.app }}
+      ASSET_URL: ${{ matrix.url }}
+      ASSET_SHA256: ${{ matrix.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Fetch the pinned release binary
+        run: |
+          curl --fail --location --retry 3 --output release.tar.gz "$ASSET_URL"
+          echo "$ASSET_SHA256  release.tar.gz" | sha256sum --check
+          mkdir stage
+          tar -xzf release.tar.gz --strip-components=1 -C stage
+          cp "native-ci/ai.storyteller.$APP.yml" manifest.yml
+      - name: Build the exact changed bundle manifest
+        run: |
+          flatpak-builder --user --install-deps-from=flathub --assumeyes --disable-rofiles-fuse --force-clean --default-branch=stable --repo=repo build manifest.yml
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo test.flatpak "ai.storyteller.$APP" stable
+          cat build/metadata
+          grep -Fx "runtime=org.freedesktop.Platform/${{ matrix.arch }}/26.08" build/metadata
+          grep -Fx "sdk=org.freedesktop.Sdk/${{ matrix.arch }}/26.08" build/metadata
+      - name: Open, save, reopen, export and render under the Platform
+        run: python3 native-ci/smoke.py
+      - name: Verify the source manifest's Rust SDK extension
+        run: |
+          flatpak install --user --noninteractive flathub org.freedesktop.Sdk.Extension.rust-stable//26.08
+          flatpak build-init --sdk-extension=org.freedesktop.Sdk.Extension.rust-stable probe ai.storyteller.FlatpakProbe org.freedesktop.Sdk org.freedesktop.Platform 26.08
+          flatpak build probe sh -ec '
+            export PATH=/usr/lib/sdk/rust-stable/bin:$PATH
+            rustc --version
+            cargo --version
+            printf "%s\n" "fn main() { println!(\"26.08 Rust extension works\"); }" > /app/probe.rs
+            rustc /app/probe.rs -o /app/probe
+            /app/probe
+            pkg-config --modversion x11 xkbcommon wayland-client alsa
+          '
