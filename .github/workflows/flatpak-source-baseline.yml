@@ -1,0 +1,55 @@
+name: Flatpak 25.08 baseline source check
+on:
+  push:
+    branches: [test/flatpak-26-08]
+    paths: [.github/workflows/flatpak-source-baseline.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    name: Original vendoring on SDK 25.08
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [{"app": "gridcraft", "arch": "x86_64", "runner": "ubuntu-24.04", "url": "https://github.com/storytold/gridcraft/releases/download/v0.12.1/gridcraft-0.12.1-linux-x86_64.tar.gz", "sha256": "1c1750dd6d26376cf8c8af22b46dc0ed3d8d5cbb115e555f0fc7d0cf7a9aea9a", "source_ref": "d8c5f5885fc5320f8f1023d5fdc9f484a185ba86"}]
+    env:
+      APP: ${{ matrix.app }}
+      SOURCE_REF: ${{ matrix.source_ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common python3-venv
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Fetch the exact source checkout and changed manifest
+        run: |
+          git init source
+          git -C source remote add origin "https://github.com/storytold/$APP.git"
+          git -C source fetch --depth=1 origin "$SOURCE_REF"
+          git -C source checkout FETCH_HEAD
+          cp "native-source/ai.storyteller.$APP.yml" "source/packaging/linux/flatpak/ai.storyteller.$APP.yml"
+          sed -i "s/runtime-version: '26.08'/runtime-version: '25.08'/" "source/packaging/linux/flatpak/ai.storyteller.$APP.yml"
+          sha256sum "source/packaging/linux/flatpak/ai.storyteller.$APP.yml" source/Cargo.lock
+      - name: Generate the documented offline Cargo sources
+        run: |
+          git init generator
+          git -C generator fetch --depth=1 https://github.com/flatpak/flatpak-builder-tools.git 9d86d336a39b9af38b86f114b6ce5820fe260f91
+          git -C generator checkout FETCH_HEAD
+          python3 -m venv generator-env
+          generator-env/bin/pip install 'aiohttp>=3.9.5,<4' 'tomlkit>=0.13.3,<1'
+          generator-env/bin/pip freeze
+          cd source
+          ../generator-env/bin/python ../generator/cargo/flatpak-cargo-generator.py Cargo.lock -o "packaging/linux/flatpak/cargo-sources.json"
+      - name: Confirm the original source preparation fails identically on 25.08
+        run: |
+          set +e
+          flatpak-builder --user --install-deps-from=flathub --assumeyes --disable-rofiles-fuse --force-clean --jobs=2 --repo=source-repo --state-dir=source-state source-build "source/packaging/linux/flatpak/ai.storyteller.$APP.yml" > baseline.log 2>&1
+          status=$?
+          set -e
+          tail -40 baseline.log
+          test "$status" -ne 0
+          grep -F 'does not contain packages matching `egui_demo_lib`' baseline.log

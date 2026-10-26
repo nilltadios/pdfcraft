@@ -42,7 +42,7 @@ jobs:
           generator-env/bin/pip install 'aiohttp>=3.9.5,<4' 'tomlkit>=0.13.3,<1'
           generator-env/bin/pip freeze
           cd source
-          ../generator-env/bin/python ../generator/cargo/flatpak-cargo-generator.py Cargo.lock -o "packaging/linux/flatpak/cargo-sources.json"
+          ../generator-env/bin/python ../native-source/generate-cargo-sources.py --generator ../generator/cargo/flatpak-cargo-generator.py Cargo.lock -o "packaging/linux/flatpak/cargo-sources.json"
       - name: Build the changed source manifest offline under SDK 26.08
         run: |
           flatpak-builder --user --install-deps-from=flathub --assumeyes --disable-rofiles-fuse --force-clean --jobs=2 --repo=source-repo --state-dir=source-state source-build "source/packaging/linux/flatpak/ai.storyteller.$APP.yml"
